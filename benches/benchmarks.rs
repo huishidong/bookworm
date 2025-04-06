@@ -1,7 +1,7 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 
-use bookworm::feedhandler::*;
-use bookworm::tests::TEST_DATA;
+use bookworm::data_handler::*;
+use bookworm::test_data::TEST_DATA;
 
 fn bench_get_top_n_binance(c: &mut Criterion) {
     c.bench_function("get_top_n_binance", |b| {
@@ -25,7 +25,12 @@ fn bench_get_top_n_bitstamp(c: &mut Criterion) {
 
 fn bench_get_top_n_bids_asks_raw_bitstamp(c: &mut Criterion) {
     c.bench_function("get_top_n_bids_asks_raw_bitstamp", |b| {
-        b.iter(|| get_top_n_bids_asks_raw(black_box(bookworm::bitstamp::skip_to_orderbook_data(&TEST_DATA.bitstamp_json_byte).unwrap()), black_box(10)))
+        b.iter(|| {
+            get_top_n_bids_asks_raw(
+                black_box(bookworm::bitstamp::skip_to_orderbook_data(TEST_DATA.bitstamp_json_byte).unwrap()),
+                black_box(10),
+            )
+        })
     });
 }
 
@@ -38,6 +43,11 @@ fn bench_parse_bitstamp_instreammessage(c: &mut Criterion) {
         b.iter(|| parse_bitstamp_instreammessage(black_box(TEST_DATA.bitstamp_json_byte)))
     });
 }
-criterion_group!(benches_bitstamp, bench_get_top_n_bitstamp, bench_get_top_n_bids_asks_raw_bitstamp, bench_parse_bitstamp_instreammessage);
+criterion_group!(
+    benches_bitstamp,
+    bench_get_top_n_bitstamp,
+    bench_get_top_n_bids_asks_raw_bitstamp,
+    bench_parse_bitstamp_instreammessage
+);
 
 criterion_main!(benches_binance, benches_bitstamp);

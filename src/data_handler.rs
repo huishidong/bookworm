@@ -1,12 +1,66 @@
-use serde::de::{self, Deserializer, Visitor, MapAccess};
+//! # Data Handler Module
+//!
+//! This module provides functionality for processing and extracting data related to order books,
+//! specifically focusing on retrieving the top N bids and asks from JSON data. It is designed to
+//! handle different formats of order book data and provides utilities for both structured and raw JSON inputs.
+//!
+//! ## Features
+//!
+//! - **`get_top_n`**: A generic function that extracts the top N bids and asks from a JSON string
+//!   representing an order book. This function requires the order book type to implement the `PxQtBook`
+//!   trait and be deserializable. A complete parsing of the json is done within the function.
+//!
+//! - **`get_top_n_bids_asks_raw`**: A function that extracts the top N bids and asks directly from raw JSON
+//!   data without requiring a specific order book type. This is achieved using custom deserialization logic
+//!   to limit the number of elements processed. This function avoid the full parsing, it just traverse the
+//!   `bids`` and the `asks`, parsing only the top n [String; 2] of each.
+//!
+//! ## Dependencies
+//!
+//! - **`serde`**: Used for JSON deserialization.
+//! - **`serde_json`**: Provides JSON parsing and deserialization capabilities.
+//!
+//! ## Error Handling
+//!
+//! Both functions return a `Result` type, with the `Ok` variant containing a tuple of `PxQtLadder`
+//! for bids and asks, and the `Err` variant containing a boxed error for handling deserialization
+//! or parsing issues.
+//!
+//! ## Testing
+//!
+//! The module includes comprehensive unit tests to ensure correctness and robustness. The tests cover:
+//! - Handling cases where the requested number of levels exceeds the available levels in the JSON data.
+//! - Validating the correctness of the extracted top N bids and asks for different order book formats.
+//! - Ensuring compatibility with both structured and raw JSON inputs.
+//!
+//! ## Example Usage
+//!
+//! ```rust
+//! use crate::data_handler::{get_top_n, get_top_n_bids_asks_raw};
+//!
+//! let json_str = r#"{
+//!     "bids": [["100.00", "1"], ["99.00", "2"]],
+//!     "asks": [["101.00", "1"], ["102.00", "2"]]
+//! }"#;
+//!
+//! let n = 1;
+//! let (top_bids, top_asks) = get_top_n_bids_asks_raw(json_str, n).unwrap();
+//!
+//! assert_eq!(top_bids.len(), 1);
+//! assert_eq!(top_asks.len(), 1);
+//! assert_eq!(top_bids[0][0], "100.00");
+//! assert_eq!(top_asks[0][0], "101.00");
+//! ```
+//!
+use crate::data_types::{PxQtBook, PxQtLadder};
 use serde::de::SeqAccess;
+use serde::de::{self, Deserializer, MapAccess, Visitor};
 use std::error::Error;
 use std::fmt;
-use crate::price_level::{PxQtLadder, BidAsk};
 
-pub fn get_top_n<T>(json_str: &str, n: usize) -> Result<(PxQtLadder, PxQtLadder), Box<dyn std::error::Error>> 
+pub fn get_top_n<T>(json_str: &str, n: usize) -> Result<(PxQtLadder, PxQtLadder), Box<dyn std::error::Error>>
 where
-    T: BidAsk + serde::de::DeserializeOwned,
+    T: PxQtBook + serde::de::DeserializeOwned,
 {
     let orderbook: T = serde_json::from_str(json_str)?;
 
@@ -17,7 +71,6 @@ where
 }
 
 pub fn get_top_n_bids_asks_raw(raw_json: &str, n: usize) -> Result<(PxQtLadder, PxQtLadder), Box<dyn Error>> {
- 
     struct TopNArray {
         n: usize,
     }
@@ -85,10 +138,10 @@ pub fn get_top_n_bids_asks_raw(raw_json: &str, n: usize) -> Result<(PxQtLadder, 
                 match key {
                     "bids" => {
                         bids = map.next_value_seed(TopNArray { n: self.n })?;
-                    },
+                    }
                     "asks" => {
                         asks = map.next_value_seed(TopNArray { n: self.n })?;
-                    },
+                    }
                     _ => {
                         let _ignored: serde_json::Value = map.next_value()?;
                     }
@@ -110,13 +163,14 @@ pub fn get_top_n_bids_asks_raw(raw_json: &str, n: usize) -> Result<(PxQtLadder, 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{bitstamp::skip_to_orderbook_data, tests::TEST_DATA};
+    use crate::{bitstamp::skip_to_orderbook_data, test_data::TEST_DATA};
 
     #[test]
     fn test_binance_get_top_n_not_enough_levels() {
         let n_requested: usize = TEST_DATA.n_level_in_json_str + 1;
 
-        let (top_bids, top_asks) = get_top_n::<crate::binance::OrderBook>(TEST_DATA.json_str, n_requested).expect("Failed to get top n bids and asks");
+        let (top_bids, top_asks) = get_top_n::<crate::binance::OrderBook>(TEST_DATA.json_str, n_requested)
+            .expect("Failed to get top n bids and asks");
 
         assert_eq!(top_bids.len(), TEST_DATA.n_level_in_json_str);
         assert_eq!(top_asks.len(), TEST_DATA.n_level_in_json_str);
@@ -130,7 +184,8 @@ mod tests {
     fn test_bitstamp_get_top_n_not_enough_levels() {
         let n_requested: usize = TEST_DATA.n_level_in_json_str + 1;
 
-        let (top_bids, top_asks) = get_top_n::<crate::bitstamp::OrderBookData>(&TEST_DATA.json_str, n_requested).expect("Failed to get top n bids and asks");
+        let (top_bids, top_asks) = get_top_n::<crate::bitstamp::OrderBookData>(TEST_DATA.json_str, n_requested)
+            .expect("Failed to get top n bids and asks");
 
         assert_eq!(top_bids.len(), TEST_DATA.n_level_in_json_str);
         assert_eq!(top_asks.len(), TEST_DATA.n_level_in_json_str);
@@ -144,7 +199,8 @@ mod tests {
     fn test_get_top_n_bids_asks_raw_not_enough_levels() {
         let n_requested: usize = TEST_DATA.n_level_in_json_str + 1;
 
-        let (top_bids, top_asks) = get_top_n_bids_asks_raw(TEST_DATA.json_str, n_requested).expect("Failed to get top n bids and asks");
+        let (top_bids, top_asks) =
+            get_top_n_bids_asks_raw(TEST_DATA.json_str, n_requested).expect("Failed to get top n bids and asks");
 
         assert_eq!(top_bids.len(), TEST_DATA.n_level_in_json_str);
         assert_eq!(top_asks.len(), TEST_DATA.n_level_in_json_str);
@@ -157,7 +213,8 @@ mod tests {
     #[test]
     fn test_binance_get_top_n() {
         let n: usize = 10;
-        let (top_bids, top_asks) = get_top_n::<crate::binance::OrderBook>(TEST_DATA.binance_json_byte, n).expect("Failed to get top n bids and asks");
+        let (top_bids, top_asks) = get_top_n::<crate::binance::OrderBook>(TEST_DATA.binance_json_byte, n)
+            .expect("Failed to get top n bids and asks");
         println!("top_bids: {:?}", &top_bids);
         println!("top_asks: {:?}", &top_asks);
         assert_eq!(top_bids.len(), n);
@@ -167,7 +224,8 @@ mod tests {
     #[test]
     fn test_bitstamp_get_top_n() {
         let n: usize = 10;
-        let (top_bids, top_asks) = get_top_n::<crate::bitstamp::OrderBook>(TEST_DATA.bitstamp_json_byte, n).expect("Failed to get top n bids and asks");
+        let (top_bids, top_asks) = get_top_n::<crate::bitstamp::OrderBook>(TEST_DATA.bitstamp_json_byte, n)
+            .expect("Failed to get top n bids and asks");
         println!("top_bids: {:?}", &top_bids);
         println!("top_asks: {:?}", &top_asks);
         assert_eq!(top_bids.len(), n);
@@ -177,7 +235,8 @@ mod tests {
     #[test]
     fn test_binance_get_top_n_bids_asks_raw() {
         let n = 5;
-        let (top_bids, top_asks) = get_top_n_bids_asks_raw(TEST_DATA.binance_json_byte, n).expect("Failed to get top n bids and asks");
+        let (top_bids, top_asks) =
+            get_top_n_bids_asks_raw(TEST_DATA.binance_json_byte, n).expect("Failed to get top n bids and asks");
 
         println!("top_bids: {:?}", &top_bids);
         println!("top_asks: {:?}", &top_asks);
@@ -188,14 +247,13 @@ mod tests {
     #[test]
     fn test_bitstamp_get_top_n_bids_asks_raw() {
         let n = 5;
-        let (top_bids, top_asks) = 
-        get_top_n_bids_asks_raw(skip_to_orderbook_data(&TEST_DATA.bitstamp_json_byte).unwrap(), n)
-        .expect("Failed to get top n bids and asks");
+        let (top_bids, top_asks) =
+            get_top_n_bids_asks_raw(skip_to_orderbook_data(TEST_DATA.bitstamp_json_byte).unwrap(), n)
+                .expect("Failed to get top n bids and asks");
 
         println!("top_bids: {:?}", &top_bids);
         println!("top_asks: {:?}", &top_asks);
         assert_eq!(top_bids.len(), n);
         assert_eq!(top_asks.len(), n);
     }
-
 }

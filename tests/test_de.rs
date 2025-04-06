@@ -13,7 +13,7 @@ use std::marker::PhantomData;
 // appending each integer into the existing Vec.
 struct ExtendVec<'a, T: 'a>(&'a mut Vec<T>);
 
-impl<'de, 'a, T> DeserializeSeed<'de> for ExtendVec<'a, T>
+impl<'de, T> DeserializeSeed<'de> for ExtendVec<'_, T>
 where
     T: Deserialize<'de>,
 {
@@ -30,7 +30,7 @@ where
         // input.
         struct ExtendVecVisitor<'a, T: 'a>(&'a mut Vec<T>);
 
-        impl<'de, 'a, T> Visitor<'de> for ExtendVecVisitor<'a, T>
+        impl<'de, T> Visitor<'de> for ExtendVecVisitor<'_, T>
         where
             T: Deserialize<'de>,
         {
