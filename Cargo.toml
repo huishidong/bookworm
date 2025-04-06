@@ -1,0 +1,30 @@
+[package]
+name = "bookworm"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+prost = "0.13.5"
+tonic = { version = "0.13.0", features = ["transport"] }
+tokio = { version = "1.37.0", features = ["full"] }
+tokio-stream = { version = "0.1.10", features = ["full"] }
+
+[build-dependencies]
+# prost-build = { version = "0.13.5" }
+tonic-build = { version = "0.13.0" }
+
+[[bin]]
+name = "grpc-server"
+path = "src/server.rs"
+
+[[bin]]
+name = "grpc-client"
+path = "src/client.rs"
+
+[[bin]]
+name = "grpc-sserver"
+path = "src/sserver.rs"
+
+[[bin]]
+name = "grpc-sclient"
+path = "src/sclient.rs"
