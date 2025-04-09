@@ -3,8 +3,9 @@ use std::fs::File;
 use std::io::Write;
 use bookworm::bitstamp;
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+#[tokio::test]
+#[ignore]
+async fn test_rest_api() -> Result<(), Box<dyn std::error::Error>> {
     let url = String::from("https://www.bitstamp.net/api/v2/order_book/btcusd?group=1");
     let path = "tests/data/order_book.json";
     match bitstamp::request_snapshot(&url).await {

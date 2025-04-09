@@ -1,4 +1,3 @@
-use tonic::transport::Channel;
 use orderbook::orderbook_aggregator_client::OrderbookAggregatorClient;
 use orderbook::Empty;
 

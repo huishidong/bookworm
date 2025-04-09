@@ -1,8 +1,8 @@
-use std::fs;
 use std::error::Error;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio_tungstenite::{Connector, connect_async_tls_with_config, tungstenite::protocol::Message};
+use super::price_level::{PxQtLadder, BidAsk};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Heartbeat {
@@ -29,101 +29,128 @@ pub struct InStreamMessage {
 
 #[derive(Debug, Deserialize)]
 pub struct OrderBook {
+    pub data: OrderBookData,
+    pub event: String,
+    pub channel: String,
+}
+#[derive(Debug, Deserialize)]
+pub struct OrderBookData {
     pub timestamp: String,
     pub microtimestamp: String,
-    pub bids: Vec<[String; 2]>,
-    pub asks: Vec<[String; 2]>,
+    pub bids: PxQtLadder,
+    pub asks: PxQtLadder,
+}
+impl BidAsk for OrderBook {
+    fn get_bid(&self) -> &PxQtLadder {
+        &self.data.bids
+    }
+    fn get_ask(&self) -> &PxQtLadder {
+        &self.data.asks
+    }    
+}
+impl BidAsk for OrderBookData {
+    fn get_bid(&self) -> &PxQtLadder {
+        &self.bids
+    }
+    fn get_ask(&self) -> &PxQtLadder {
+        &self.asks
+    }    
 }
 
-pub async fn connect_websocket(connector: Connector, url: &str) -> Result<(), Box<dyn std::error::Error>> {
+/// The offset for the order book data in the message where the order book data starts
+const BITSTAMP_ORDERBOOK_DATA_OFFSET: usize = 8;
+const DATA_PREFIX: &str = "{\"data\":";
+pub fn skip_to_orderbook_data(json_str: &str) -> Result<&str, Box<dyn Error>> {
+    let json_len = json_str.len();
+    if json_len > BITSTAMP_ORDERBOOK_DATA_OFFSET {
+        Ok(&json_str[BITSTAMP_ORDERBOOK_DATA_OFFSET..])
+    } else {
+        Err("Invalid JSON length".into())
+    }
+}
+
+pub async fn connect_websocket(connector: Connector, url: &str, symbol: &str) -> Result<(), Box<dyn std::error::Error>> {
     let (ws_stream, _) = connect_async_tls_with_config(
         url, None, true, Some(connector)
     ).await?;
     println!("Connected to Bitstamp WebSocket API");
     
     let (mut write, mut read) = ws_stream.split();
-    
-    // Subscribe to the order book channel for BTC/USD
-    // var subscribeMsg = {
-    //     "event": "bts:subscribe",
-    //     "data": {
-    //         "channel": "diff_order_book_btcusd"
-    //     }
-    // };
+    let channel_name = format!("order_book_{}", symbol);
     let subscription = Subscription {
         event: "bts:subscribe".to_string(),
         data: SubscriptionData {
-            channel: "order_book_btcusd".to_string(),
+            channel: channel_name.clone(),
         },
     };
     
     let subscription_json = serde_json::to_string(&subscription)?;
     write.send(Message::Text(subscription_json.into())).await?;
-    println!("Sent subscription request for btcusd");
+    println!("Sent subscription request for {}", symbol);
 
     // Handle incoming messages
     println!("Waiting for order updates...");
     let mut count = 0;
     while let Some(message) = read.next().await {
         count += 1;
-        // match count {
-        //     20 => {
-        //         println!("Received first message")
-        //     },
-        //     100 => break
-        // }
         if count > 100  {
             break;
         }
 
-        println!("Received message[{count}]: {:?}", message);
         match message {
             Ok(msg) => {
                 if let Message::Text(text) = msg {
-                    match serde_json::from_str::<InStreamMessage>(&text) {
-                        Ok(parsed) => {
-                            // Handle different event types
-                            if let Some(event) = &parsed.event {
-                                match event.as_str() {
-                                    "bts:subscription_succeeded" => {
-                                        println!("Successfully subscribed to channel: {:?}", parsed.channel);
+                    if text.starts_with(DATA_PREFIX) {
+                        match skip_to_orderbook_data(&text) {
+                            Ok(data) => {
+                                match crate::feedhandler::get_top_n_bids_asks_raw(data, 10) {
+                                    Ok((bids, asks)) => {
+                                        println!("Top 10 Bids: {:?}", bids);
+                                        println!("Top 10 Asks: {:?}", asks);
                                     },
-                                    "order_created" | "order_changed" | "order_deleted" => {
-                                        println!("Order event: {}", event);
-                                        if let Some(data) = parsed.data {
-                                            println!("Order data: {:#?}", data);
-                                        }
-                                    },
-                                    "data" => {
-                                        println!("LiveOrderBook event: {}", event);
-                                        if let Some(data) = parsed.data {
-                                            match serde_json::from_str::<OrderBook>(data.to_string().as_str()) {
-                                                Ok(book) => {
-                                                    println!("OrderBook data: {:#?}", book);
-                                                },
-                                                Err(e) => {
-                                                    println!("Failed to parse message: {}", e);
-                                                    println!("Raw message: {}", text);
-                                                }
-                                            }
-                                        }
-                                    },
-                                    "bts:error" => {
-                                        println!("Error received: {:?}", parsed.data);
-                                    },
-                                    _ => {
-                                        println!("Received other event: {}", event);
-                                        println!("Data: {:?}", parsed.data);
+                                    Err(e) => {
+                                        println!("Failed to parse orderbook data in message: {}", e);
+                                        println!("Raw message: {}", text);
                                     }
                                 }
-                                //// TODO: handle heartbeat and disconnect/connect msgs
-                            } else {
-                                println!("Received message without event: {}", text);
+                            },
+                            Err(e) => {
+                                println!("Failed to skip data tag in message: {}", e);
+                                println!("Raw message: {}", text);
                             }
-                        },
-                        Err(e) => {
-                            println!("Failed to parse message: {}", e);
-                            println!("Raw message: {}", text);
+                        }
+                    } else {
+                        match serde_json::from_str::<InStreamMessage>(&text) {
+                            Ok(parsed) => {
+                                // Handle different event types
+                                if let Some(event) = &parsed.event {
+                                    match event.as_str() {
+                                        "bts:subscription_succeeded" => {
+                                            println!("Successfully subscribed to channel: {:?}", parsed.channel);
+                                        },
+                                        "order_created" | "order_changed" | "order_deleted" => {
+                                            println!("Order event: {}", event);
+                                            if let Some(data) = parsed.data {
+                                                println!("Order data: {:#?}", data);
+                                            }
+                                        },
+                                        "bts:error" => {
+                                            println!("Error received: {:?}", parsed.data);
+                                        },
+                                        _ => {
+                                            println!("Received other event: {}", event);
+                                            println!("Data: {:?}", parsed.data);
+                                        }
+                                    }
+                                    //// TODO: handle heartbeat and disconnect/connect msgs
+                                } else {
+                                    println!("Received message without event: {}", text);
+                                }
+                            },
+                            Err(e) => {
+                                println!("Failed to parse message: {}", e);
+                                println!("Raw message: {}", text);
+                            }
                         }
                     }
                 }
@@ -139,13 +166,13 @@ pub async fn connect_websocket(connector: Connector, url: &str) -> Result<(), Bo
     let unsubscription = Subscription {
         event: "bts:unsubscribe".to_string(),
         data: SubscriptionData {
-            channel: "order_book_btcusd".to_string(),
+            channel: channel_name.clone(),
         },
     };
     
     let unsubscription_json = serde_json::to_string(&unsubscription)?;
     write.send(Message::Text(unsubscription_json.into())).await?;
-    println!("Sent unsubscription request for live_orders_btcusd");
+    println!("Sent unsubscription request for {}", &channel_name);
     if let Some(message) = read.next().await {
         match message {
             Ok(msg) => {
@@ -163,7 +190,7 @@ pub async fn connect_websocket(connector: Connector, url: &str) -> Result<(), Bo
 
     // Disconnect
     write.close().await?;
-    println!("Disconnected");
+    println!("Disconnected from Bitstamp WebSocket API");
     Ok(())
 }
 

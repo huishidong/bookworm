@@ -1,15 +1,15 @@
 use tonic::{transport::Server, Request, Response, Status};
-use tokio_stream::{wrappers::ReceiverStream};
+use tokio_stream::wrappers::ReceiverStream;
 use tokio::sync::mpsc;
 use orderbook::orderbook_aggregator_server::{OrderbookAggregator, OrderbookAggregatorServer};
 use orderbook::{Summary, Level, Empty};
 
-pub mod orderbook {
+mod orderbook {
     tonic::include_proto!("orderbook");
 }
 
 #[derive(Debug, Default)]
-pub struct MyOrderbookAggregator {}
+struct MyOrderbookAggregator {}
 
 #[tonic::async_trait]
 impl OrderbookAggregator for MyOrderbookAggregator {
@@ -32,7 +32,7 @@ impl OrderbookAggregator for MyOrderbookAggregator {
                             amount: 5.0,
                         },
                         Level {
-                            exchange: "Coinbase".to_string(),
+                            exchange: "Bitstamp".to_string(),
                             price: 101.0 + i as f64,
                             amount: 10.0,
                         },
@@ -44,7 +44,7 @@ impl OrderbookAggregator for MyOrderbookAggregator {
                             amount: 5.0,
                         },
                         Level {
-                            exchange: "Coinbase".to_string(),
+                            exchange: "Bitstamp".to_string(),
                             price: 103.0 + i as f64,
                             amount: 10.0,
                         },
