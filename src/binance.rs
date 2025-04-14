@@ -1,7 +1,7 @@
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio_tungstenite::{Connector, connect_async_tls_with_config, tungstenite::protocol::Message};
-
+use super::price_level::{PxQtLadder, BidAsk};
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Subscription {
    pub method: String, // "SUBSCRIBE", "UNSUBSCRIBE"
@@ -16,54 +16,76 @@ pub struct ResponseMessage {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(non_snake_case)]
 pub struct OrderBook {
     pub lastUpdateId: u64,
-    pub bids: Vec<[String; 2]>,
-    pub asks: Vec<[String; 2]>,
+    pub bids: PxQtLadder,
+    pub asks: PxQtLadder,
+}
+impl BidAsk for OrderBook {
+    fn get_bid(&self) -> &PxQtLadder {
+        &self.bids
+    }
+    fn get_ask(&self) -> &PxQtLadder {
+        &self.asks
+    }    
 }
 
-pub async fn connect_websocket(connector: Connector, url: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn connect_websocket(connector: Connector, url: &str, symbol: &str) -> Result<(), Box<dyn std::error::Error>> {
     let (ws_stream, _) = connect_async_tls_with_config(
         url, None, true, Some(connector)
     ).await?;
     println!("Connected to WebSocket API");
     
     let (mut write, mut read) = ws_stream.split();
-    
+    let channel_name = format!("{}@depth10@100ms", symbol);
     let subscription = Subscription {
         method: "SUBSCRIBE".to_string(),
-        params: vec!["btcusdt@depth10@100ms".to_string()],
+        params: vec![channel_name.clone()],
         id: 1,
     };
     
     let subscription_json = serde_json::to_string(&subscription)?;
     write.send(Message::Text(subscription_json.into())).await?;
-    println!("Sent subscription request for btcusdt@depth10@100ms");
+    println!("Sent subscription request for {}", &channel_name);
 
     // Handle incoming messages
     println!("Waiting for order updates...");
     let mut count = 0;
     while let Some(message) = read.next().await {
-        count += 1;
-        if count > 100  {
+        if count > 6 {
             break;
         }
 
-        println!("Received message[{count}]: {:?}", message);
         match message {
             Ok(msg) => {
                 if let Message::Text(text) = msg {
-                    println!("Received Text message: {}", text);
-                    //// TODO: handle ping/pong and disconnect/connect msgs
-                    match serde_json::from_str::<OrderBook>(&text) {
-                        Ok(parsed) => {
-                            println!("OrderBook data: {:#?}", parsed);
+                    match crate::feedhandler::get_top_n_bids_asks_raw(&text, 10) {
+                        Ok((bids, asks)) => {
+                            if !bids.is_empty() {
+                                println!("Top 10 Bids: {:?}", bids);
+                            }
+                            if !asks.is_empty() {
+                                println!("Top 10 Asks: {:?}", asks);
+                            }
+                            if bids.is_empty() && asks.is_empty() {
+                                println!("No bids or asks found, msg: {}", text);
+                            }
                         },
                         Err(e) => {
                             println!("Failed to parse message: {}", e);
                             println!("Raw message: {}", text);
                         }
                     }
+                } else if let Message::Ping(ping) = msg {
+                    println!("Received Ping message: {:?}", ping);
+                    write.send(Message::Pong(ping)).await?;
+                    count += 1;
+                } else if let Message::Close(_) = msg {
+                    println!("Connection closed");
+                    break;
+                } else {
+                    println!("Received other message type message[{count}]: {:?}", msg);
                 }
             },
             Err(e) => {
@@ -76,7 +98,7 @@ pub async fn connect_websocket(connector: Connector, url: &str) -> Result<(), Bo
 
     let unsubscription = Subscription {
         method: "UNSUBSCRIBE".to_string(),
-        params: vec!["btcusdt@depth10@100ms".to_string()],
+        params: vec![channel_name],
         id: 1,
     };
     
